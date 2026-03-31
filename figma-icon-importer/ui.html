@@ -1,0 +1,166 @@
+<html>
+<head>
+<style>
+* { box-sizing: border-box; }
+body { font-family: Inter, system-ui, sans-serif; padding: 16px; font-size: 13px; color: #333; margin: 0; }
+h3 { margin: 0 0 4px 0; font-size: 16px; }
+p { margin: 4px 0; color: #666; }
+label { display: block; font-weight: 500; margin: 12px 0 4px; }
+input { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; background: #fff; }
+input:focus { outline: none; border-color: #18A0FB; }
+#status { margin: 12px 0 0; white-space: pre-wrap; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 11px; background: #f7f7f7; border-radius: 6px; padding: 8px; display: none; }
+button { background: #18A0FB; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; width: 100%; margin-top: 12px; }
+button:hover { background: #0d8de5; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.progress { background: #eee; border-radius: 4px; height: 8px; margin: 8px 0; display: none; }
+.progress-bar { background: #18A0FB; height: 100%; border-radius: 4px; transition: width 0.3s; }
+.stat { display: inline-block; background: #f0f7ff; color: #18A0FB; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; margin: 2px; }
+.stat.green { background: #f0fff4; color: #22863a; }
+.help { font-size: 11px; color: #999; margin-top: 4px; }
+.section { border-top: 1px solid #eee; padding-top: 12px; margin-top: 12px; }
+details { margin-top: 12px; font-size: 11px; color: #888; }
+details summary { cursor: pointer; font-weight: 500; }
+details pre { background: #f7f7f7; border-radius: 6px; padding: 8px; overflow-x: auto; font-size: 10px; line-height: 1.5; margin: 8px 0 0; color: #333; }
+</style>
+</head>
+<body>
+
+<h3>Central Icons Importer</h3>
+<p>Imports icons into the <strong>current page</strong>. Duplicates are skipped automatically.</p>
+
+<div class="section">
+  <label for="dataUrl">Icon data URL</label>
+  <input type="text" id="dataUrl" value="http://localhost:8765/icon-import.json" />
+  <p class="help">Generate with <code>node generate-json.js --since 2025-03-01</code>, then serve: <code>npx serve -p 8765 --cors</code></p>
+</div>
+
+<div id="summarySection" class="section" style="display:none">
+  <p><strong>Ready to import</strong></p>
+  <div id="summary"></div>
+</div>
+
+<div class="progress" id="progressWrap"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
+<p id="progressText" style="display:none; font-weight:500;"></p>
+
+<button id="loadBtn" onclick="loadData()">Load icon data</button>
+<button id="startBtn" onclick="startImport()" style="display:none">Import icons</button>
+
+<div id="status"></div>
+
+<details>
+  <summary>JSON format reference</summary>
+  <p>The JSON file should be an object keyed by <strong>category name</strong> (must match a frame name on the current page, or a new frame is created). Each category contains icons keyed by <strong>kebab-case name</strong>. Each icon has a <code>title</code> (becomes the component set name) and <code>variants</code> (keyed by variant property string, value is the inner SVG markup).</p>
+<pre>{
+  "AI &amp; Magic": {
+    "sparkle": {
+      "title": "sparkle, star, magic, ai",
+      "variants": {
+        "filled=off, stroke=2, radius=0, join=square": "&lt;path d=\"M12 2L...\" stroke=\"currentColor\" stroke-width=\"2\"/&gt;",
+        "filled=on, stroke=2, radius=0, join=square": "&lt;path d=\"M12 1...\" fill=\"currentColor\"/&gt;",
+        "filled=off, stroke=2, radius=0, join=round": "&lt;path ... stroke-linejoin=\"round\"/&gt;",
+        "...": "..."
+      }
+    },
+    "wand": {
+      "title": "wand, magic-wand",
+      "variants": { "...": "..." }
+    }
+  },
+  "Arrows": {
+    "arrow-up-wall": {
+      "title": "arrow-up-wall",
+      "variants": { "...": "..." }
+    }
+  }
+}</pre>
+  <p style="margin-top:8px"><strong>Variant keys</strong> follow the pattern:<br><code>filled=off|on, stroke=2|1.5|1, radius=0|1|2|3, join=square|round</code><br>(30 combinations: square only has radius=0, round has 0-3)</p>
+  <p><strong>Variant values</strong> are the inner SVG content (paths, circles, rects etc.) — everything inside the <code>&lt;svg&gt;</code> tag. The plugin wraps them in a 24x24 viewBox automatically.</p>
+</details>
+
+<script>
+let iconData = null;
+
+window.onmessage = (event) => {
+  const msg = event.data.pluginMessage;
+  if (!msg) return;
+
+  if (msg.type === 'progress') {
+    const pct = Math.round((msg.done / msg.total) * 100);
+    document.getElementById('progressBar').style.width = pct + '%';
+    document.getElementById('progressText').textContent = `${msg.done}/${msg.total} (${pct}%)`;
+    const status = document.getElementById('status');
+    status.textContent += msg.text + '\n';
+    status.scrollTop = status.scrollHeight;
+  }
+
+  if (msg.type === 'done') {
+    document.getElementById('progressText').textContent = msg.summary;
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('startBtn').textContent = 'Run again';
+    document.getElementById('loadBtn').style.display = '';
+  }
+};
+
+async function loadData() {
+  const url = document.getElementById('dataUrl').value.trim();
+  if (!url) return;
+
+  document.getElementById('loadBtn').disabled = true;
+  document.getElementById('loadBtn').textContent = 'Loading...';
+  document.getElementById('status').style.display = 'none';
+  document.getElementById('status').textContent = '';
+  document.getElementById('summarySection').style.display = 'none';
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    iconData = await resp.json();
+
+    let totalIcons = 0;
+    const catCounts = [];
+    for (const [cat, icons] of Object.entries(iconData)) {
+      const count = Object.keys(icons).length;
+      totalIcons += count;
+      catCounts.push({ cat, count });
+    }
+    catCounts.sort((a, b) => b.count - a.count);
+
+    const summaryEl = document.getElementById('summary');
+    summaryEl.innerHTML = `<span class="stat">${totalIcons} icons</span> <span class="stat">${catCounts.length} categories</span><br style="margin:4px">`;
+    for (const { cat, count } of catCounts) {
+      summaryEl.innerHTML += `<span class="stat green">${cat}: ${count}</span> `;
+    }
+
+    document.getElementById('summarySection').style.display = '';
+    document.getElementById('startBtn').style.display = '';
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('startBtn').textContent = 'Import icons';
+    document.getElementById('loadBtn').textContent = 'Reload data';
+    document.getElementById('loadBtn').disabled = false;
+  } catch (e) {
+    document.getElementById('status').style.display = '';
+    document.getElementById('status').textContent =
+      'Could not load icon data:\n' + e.message + '\n\n' +
+      'Make sure the file server is running:\n' +
+      '  npx serve -p 8765 --cors';
+    document.getElementById('loadBtn').textContent = 'Retry';
+    document.getElementById('loadBtn').disabled = false;
+  }
+}
+
+function startImport() {
+  if (!iconData) { loadData(); return; }
+
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('startBtn').textContent = 'Importing...';
+  document.getElementById('loadBtn').style.display = 'none';
+  document.getElementById('progressWrap').style.display = '';
+  document.getElementById('progressText').style.display = '';
+  document.getElementById('status').style.display = '';
+  document.getElementById('status').textContent = '';
+
+  parent.postMessage({ pluginMessage: { type: 'start', data: iconData } }, '*');
+}
+</script>
+</body>
+</html>
